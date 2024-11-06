@@ -247,7 +247,17 @@ class SegmentLungsWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Run processing when user clicks "Apply" button."""
         with slicer.util.tryWithErrorDisplay(_("Failed to compute results."), waitCursor=True):
             # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(), self.ui.referenceSelector.currentNode())
+            # self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(), self.ui.referenceSelector.currentNode())
+            dice_left, dice_right = self.logic.process(
+                self.ui.inputSelector.currentNode(),
+                self.ui.outputSelector.currentNode(),
+                self.ui.referenceSelector.currentNode()
+            )
+            
+            left_s = f"Dice Coefficient (Left Lung): {dice_left:.4f}\n"
+            right_s = f"Dice Coefficient (Right Lung): {dice_right:.4f}\n"
+            full_s = left_s + right_s
+            self.outputLabel.setText(full_s)
 
 
 
@@ -546,18 +556,17 @@ class SegmentLungsLogic(ScriptedLoadableModuleLogic):
         right_lung = labels == right_lung_label
 
         referenceVolumeArray = slicer.util.arrayFromVolume(referenceVolume)
-        left_lung_ref = referenceVolumeArray.get_fdata() == 3
-        right_lung_ref = referenceVolumeArray.get_fdata() == 2
+        left_lung_ref = referenceVolumeArray == 3
+        right_lung_ref = referenceVolumeArray == 2
         # body_mask_ref = referenceVolumeArray.get_fdata()
 
         dice_left = self.compute_dice_coefficient(left_lung, left_lung_ref)
-        left_s = f"Dice Coefficient (Left Lung): {dice_left:.4f}\n"
-
+        # left_s = f"Dice Coefficient (Left Lung): {dice_left:.4f}\n"
         dice_right = self.compute_dice_coefficient(right_lung, right_lung_ref)
-        right_s = f"Dice Coefficient (Right Lung): {dice_right:.4f}\n"
+        # right_s = f"Dice Coefficient (Right Lung): {dice_right:.4f}\n"
 
-        full_s = left_s + right_s
-        self.outputLabel.setText(full_s)
+        # full_s = left_s + right_s
+        # self.outputLabel.setText(full_s)
 
         seg = self.np.zeros_like(referenceVolumeArray)
         seg = self.np.where(left_lung, 3, seg)
@@ -588,6 +597,8 @@ class SegmentLungsLogic(ScriptedLoadableModuleLogic):
 
         stopTime = time.time()
         logging.info(f"Processing completed in {stopTime-startTime:.2f} seconds")
+
+        return dice_left, dice_right
 
 
 #
