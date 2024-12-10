@@ -1,0 +1,6 @@
+.venv
+__pycache__
+testData
+trainingData
+model_checkpoints
+CMakeFiles
