@@ -1,0 +1,8 @@
+numpy
+opencv-python
+nibabel
+torch
+matplotlib
+scikit-learn
+scikit-image
+monai
