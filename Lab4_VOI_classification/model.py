@@ -257,21 +257,34 @@ def predict_voi_boundaries(model, image_path, device, window_size=7, threshold=0
             prob = torch.softmax(output, dim=1)[0, 1].cpu().numpy()
             predictions.append(prob)
     
-    # Smooth predictions
+    # Convert to numpy array
     predictions = np.array(predictions)
+    
+    # Apply moving average smoothing
     smoothed = np.convolve(predictions, np.ones(window_size)/window_size, mode='valid')
     
-    # Find transitions
+    # If no clear transitions are found with current threshold, try adaptive thresholding
     binary_preds = (smoothed > threshold).astype(int)
     transitions = np.where(np.diff(binary_preds))[0]
+    
+    if len(transitions) < 2:
+        # Try adaptive thresholding
+        threshold = np.mean(smoothed) + 0.5 * np.std(smoothed)  # Adjust multiplier as needed
+        binary_preds = (smoothed > threshold).astype(int)
+        transitions = np.where(np.diff(binary_preds))[0]
     
     if len(transitions) >= 2:
         # Add offset due to smoothing window
         start_idx = transitions[0] + window_size//2
         end_idx = transitions[-1] + window_size//2
         return start_idx, end_idx
-    
-    return None, None
+    else:
+        # If still no transitions found, use peak detection approach
+        peak_idx = np.argmax(smoothed)
+        # Estimate a reasonable VOI range (e.g., 20 slices centered on peak)
+        start_idx = max(0, peak_idx - 10 + window_size//2)
+        end_idx = min(len(predictions) - 1, peak_idx + 10 + window_size//2)
+        return start_idx, end_idx
 
 def evaluate_predictions(predicted_boundaries, reference_boundaries):
     """
@@ -287,11 +300,14 @@ def evaluate_predictions(predicted_boundaries, reference_boundaries):
     return delta
 
 def test_model(model_path, test_files, reference_boundaries, device):
-    """
-    Test model on multiple files and calculate average delta.
-    """
-    # Load model
-    model = VOIClassifier().to(device)  # Changed from DenseNet121 to our custom model
+    # Initialize model
+    model = VOIClassifier().to(device)
+    
+    # Create a dummy input to initialize fc1 layer
+    dummy_input = torch.zeros(1, 1, 256, 256).to(device)  # Assuming 256x256 input size
+    _ = model(dummy_input)  # This will initialize fc1
+    
+    # Now load the state dict
     model.load_state_dict(torch.load(model_path))
     model.eval()
     
