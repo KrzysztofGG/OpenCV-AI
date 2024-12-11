@@ -2,14 +2,15 @@ import torch
 import os
 from model import test_model
 
-def load_reference_boundaries(ranges_file):
+def load_reference_boundaries(ranges_file, test_dir):
     """Load reference boundaries from ranges.txt file"""
     reference_boundaries = {}
     with open(ranges_file, 'r') as f:
-        for line in f:
+        for i, line in enumerate(f):
             if line.strip():  # Skip empty lines
-                file_name, end_idx, start_idx = line.strip().split('\t')
-                reference_boundaries[os.path.join('testData', file_name)] = (int(start_idx), int(end_idx))
+                start_idx, end_idx = map(int, line.strip().split())
+                file_name = f"{i}.nii.gz"  # Assuming file naming convention
+                reference_boundaries[os.path.join(test_dir, file_name)] = (start_idx, end_idx)
     return reference_boundaries
 
 def test():
@@ -20,7 +21,7 @@ def test():
     ranges_file = os.path.join(test_dir, "ranges.txt")
     
     # Load reference boundaries
-    reference_boundaries = load_reference_boundaries(ranges_file)
+    reference_boundaries = load_reference_boundaries(ranges_file, test_dir)
     
     # Get corresponding test files
     test_files = list(reference_boundaries.keys())
@@ -39,4 +40,6 @@ def test():
     return avg_delta
 
 if __name__ == "__main__":
-    test() 
+    avg_delta = test()
+    with open('avg_delta.txt', 'w') as f:
+        f.write(f"{avg_delta}")
