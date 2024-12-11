@@ -236,9 +236,9 @@ def load_and_preprocess_test_image(file_path, target_size=(256, 256)):
     
     return np.array(processed_slices)
 
-def predict_voi_boundaries(model, image_path, device, window_size=11, threshold=0.4):
+def predict_voi_boundaries(model, image_path, device, window_size=15, threshold=0.3):
     """
-    Predict VOI boundaries with improved accuracy
+    Predict VOI boundaries using a more conservative approach
     """
     # Load and preprocess image
     slices = load_and_preprocess_test_image(image_path)
@@ -255,45 +255,22 @@ def predict_voi_boundaries(model, image_path, device, window_size=11, threshold=
     
     predictions = np.array(predictions)
     
-    # Apply stronger smoothing
+    # Apply simple moving average smoothing
     smoothed = np.convolve(predictions, np.ones(window_size)/window_size, mode='valid')
     
-    # Calculate adaptive threshold using percentile
-    threshold = np.percentile(smoothed, 60)  # Use 60th percentile as threshold
+    # Find the region with highest average probability
+    avg_voi_length = 22  # Average from reference data
+    window_sum = np.convolve(smoothed, np.ones(avg_voi_length), 'valid')
+    center_idx = np.argmax(window_sum) + avg_voi_length // 2
     
-    # Find all potential transitions
-    binary_preds = (smoothed > threshold).astype(int)
-    transitions = np.where(np.diff(binary_preds))[0]
+    # Set boundaries based on center point
+    half_length = avg_voi_length // 2
+    start_idx = max(0, center_idx - half_length)
+    end_idx = min(len(predictions) - 1, center_idx + half_length)
     
-    if len(transitions) >= 2:
-        # Find the longest continuous segment
-        segments = []
-        for i in range(0, len(transitions)-1, 2):
-            if i+1 < len(transitions):
-                segment_length = transitions[i+1] - transitions[i]
-                segments.append((transitions[i], transitions[i+1], segment_length))
-        
-        if segments:
-            # Sort segments by length and probability sum
-            segments.sort(key=lambda x: (x[2], sum(smoothed[x[0]:x[1]])), reverse=True)
-            start_idx = segments[0][0] + window_size//2
-            end_idx = segments[0][1] + window_size//2
-            
-            # Adjust boundaries based on local maxima/minima
-            window = 5
-            start_region = smoothed[max(0, start_idx-window):start_idx+window]
-            end_region = smoothed[end_idx-window:min(len(smoothed), end_idx+window)]
-            
-            start_idx += np.argmin(start_region) - window
-            end_idx += np.argmax(end_region) - window
-            
-            return start_idx, end_idx
-    
-    # Fallback to peak-based detection with dynamic window
-    peak_idx = np.argmax(smoothed)
-    avg_voi_size = 25  # Average VOI size from reference data
-    start_idx = max(0, peak_idx - avg_voi_size//2 + window_size//2)
-    end_idx = min(len(predictions) - 1, peak_idx + avg_voi_size//2 + window_size//2)
+    # Adjust for smoothing window offset
+    start_idx += window_size // 2
+    end_idx += window_size // 2
     
     return start_idx, end_idx
 
