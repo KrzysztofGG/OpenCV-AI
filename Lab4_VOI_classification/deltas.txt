@@ -1,0 +1,49 @@
+File: testData/0.nii.gz
+Predicted: 25-47
+Reference: 25-47
+Delta: 0
+
+File: testData/1.nii.gz
+Predicted: 27-49
+Reference: 24-46
+Delta: 6
+
+File: testData/2.nii.gz
+Predicted: 14-36
+Reference: 22-46
+Delta: 18
+
+File: testData/3.nii.gz
+Predicted: 65-87
+Reference: 43-86
+Delta: 23
+
+File: testData/4.nii.gz
+Predicted: 19-41
+Reference: 19-38
+Delta: 3
+
+File: testData/5.nii.gz
+Predicted: 17-39
+Reference: 30-49
+Delta: 23
+
+File: testData/6.nii.gz
+Predicted: 9-31
+Reference: 21-43
+Delta: 24
+
+File: testData/7.nii.gz
+Predicted: 14-36
+Reference: 26-46
+Delta: 22
+
+File: testData/8.nii.gz
+Predicted: 69-91
+Reference: 66-87
+Delta: 7
+
+File: testData/9.nii.gz
+Predicted: 12-34
+Reference: 21-44
+Delta: 19
