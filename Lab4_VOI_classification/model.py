@@ -356,6 +356,10 @@ def prepare_dataset():
             images.append(slice_data)
             labels.append(label)
 
+    print(images[0].shape)
+    print(len(images))
+    print(labels[0])
+
     # Convert to numpy arrays
     images_array = np.array(images).astype(np.float32)
     labels_array = np.array(labels).astype(np.int64)
