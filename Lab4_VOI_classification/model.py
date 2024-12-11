@@ -236,55 +236,66 @@ def load_and_preprocess_test_image(file_path, target_size=(256, 256)):
     
     return np.array(processed_slices)
 
-def predict_voi_boundaries(model, image_path, device, window_size=7, threshold=0.5):
+def predict_voi_boundaries(model, image_path, device, window_size=11, threshold=0.4):
     """
-    Predict VOI boundaries for a single test image.
-    Returns predicted start and end positions.
+    Predict VOI boundaries with improved accuracy
     """
     # Load and preprocess image
     slices = load_and_preprocess_test_image(image_path)
     
-    # Prepare for model
+    # Get predictions
     model.eval()
     predictions = []
-    
     with torch.no_grad():
         for slice_data in slices:
-            # Prepare input
             input_tensor = torch.tensor(slice_data).unsqueeze(0).unsqueeze(0).float().to(device)
-            # Get prediction
             output = model(input_tensor)
             prob = torch.softmax(output, dim=1)[0, 1].cpu().numpy()
             predictions.append(prob)
     
-    # Convert to numpy array
     predictions = np.array(predictions)
     
-    # Apply moving average smoothing
+    # Apply stronger smoothing
     smoothed = np.convolve(predictions, np.ones(window_size)/window_size, mode='valid')
     
-    # If no clear transitions are found with current threshold, try adaptive thresholding
+    # Calculate adaptive threshold using percentile
+    threshold = np.percentile(smoothed, 60)  # Use 60th percentile as threshold
+    
+    # Find all potential transitions
     binary_preds = (smoothed > threshold).astype(int)
     transitions = np.where(np.diff(binary_preds))[0]
     
-    if len(transitions) < 2:
-        # Try adaptive thresholding
-        threshold = np.mean(smoothed) + 0.5 * np.std(smoothed)  # Adjust multiplier as needed
-        binary_preds = (smoothed > threshold).astype(int)
-        transitions = np.where(np.diff(binary_preds))[0]
-    
     if len(transitions) >= 2:
-        # Add offset due to smoothing window
-        start_idx = transitions[0] + window_size//2
-        end_idx = transitions[-1] + window_size//2
-        return start_idx, end_idx
-    else:
-        # If still no transitions found, use peak detection approach
-        peak_idx = np.argmax(smoothed)
-        # Estimate a reasonable VOI range (e.g., 20 slices centered on peak)
-        start_idx = max(0, peak_idx - 10 + window_size//2)
-        end_idx = min(len(predictions) - 1, peak_idx + 10 + window_size//2)
-        return start_idx, end_idx
+        # Find the longest continuous segment
+        segments = []
+        for i in range(0, len(transitions)-1, 2):
+            if i+1 < len(transitions):
+                segment_length = transitions[i+1] - transitions[i]
+                segments.append((transitions[i], transitions[i+1], segment_length))
+        
+        if segments:
+            # Sort segments by length and probability sum
+            segments.sort(key=lambda x: (x[2], sum(smoothed[x[0]:x[1]])), reverse=True)
+            start_idx = segments[0][0] + window_size//2
+            end_idx = segments[0][1] + window_size//2
+            
+            # Adjust boundaries based on local maxima/minima
+            window = 5
+            start_region = smoothed[max(0, start_idx-window):start_idx+window]
+            end_region = smoothed[end_idx-window:min(len(smoothed), end_idx+window)]
+            
+            start_idx += np.argmin(start_region) - window
+            end_idx += np.argmax(end_region) - window
+            
+            return start_idx, end_idx
+    
+    # Fallback to peak-based detection with dynamic window
+    peak_idx = np.argmax(smoothed)
+    avg_voi_size = 25  # Average VOI size from reference data
+    start_idx = max(0, peak_idx - avg_voi_size//2 + window_size//2)
+    end_idx = min(len(predictions) - 1, peak_idx + avg_voi_size//2 + window_size//2)
+    
+    return start_idx, end_idx
 
 def evaluate_predictions(predicted_boundaries, reference_boundaries):
     """
