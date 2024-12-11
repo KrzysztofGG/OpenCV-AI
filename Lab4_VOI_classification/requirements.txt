@@ -1,4 +1,4 @@
-numpy
+numpy==1.26.4
 opencv-python
 nibabel
 torch
@@ -6,3 +6,4 @@ matplotlib
 scikit-learn
 scikit-image
 monai
+torchvision

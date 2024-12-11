@@ -4,58 +4,88 @@ import numpy as np
 from skimage.transform import resize
 import matplotlib.pyplot as plt
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+import torch.nn as nn
+import torch.nn.functional as F
 
-from monai.apps import download_and_extract
-from monai.config import print_config
-# from monai.data import decollate_batch, DataLoader
-from monai.metrics import ROCAUCMetric
-from monai.networks.nets import DenseNet121
-from monai.transforms import (
-    Activations,
-    EnsureChannelFirst,
-    AsDiscrete,
-    Compose,
-    LoadImage,
-    RandFlip,
-    RandRotate,
-    RandZoom,
-    ScaleIntensity,
-)
-from monai.utils import set_determinism
 
-class VOIDataset(torch.utils.data.Dataset):
-    def __init__(self, images, labels, transform=None):
+class VOIDataset(Dataset):
+    def __init__(self, images, labels, is_train=True):
         self.images = images
         self.labels = labels
-        self.transform = Compose([
-            ScaleIntensity(),
-            RandFlip(prob=0.5),
-            RandRotate(range_x=15, prob=0.5),
-            RandZoom(min_zoom=0.9, max_zoom=1.1, prob=0.5)
-        ]) if transform is None else transform
+        self.is_train = is_train
+        
+        # Define transforms for training and validation
+        if is_train:
+            self.transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.Normalize(mean=[0.456], std=[0.224])
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Normalize(mean=[0.456], std=[0.224])
+            ])
 
     def __len__(self):
         return len(self.images)
 
-    def __getitem__(self, index):
-        image = self.images[index]
-        label = self.labels[index]
+    def __getitem__(self, idx):
+        # Images are already tensors from prepare_data
+        image = self.images[idx]
+        label = self.labels[idx]
         
         if self.transform:
             image = self.transform(image)
             
         return image, label
 
+
+class VOIClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3)
+        self.pool = nn.MaxPool2d(2)
+        self.dropout = nn.Dropout(0.25)
+        # We'll calculate fc1 input size in forward pass
+        self.fc1 = None
+        self.fc2 = nn.Linear(512, 2)
+        
+    def _get_conv_output_size(self, shape):
+        # Helper function to calculate output size
+        # Create tensor on the same device as the model's parameters
+        device = next(self.parameters()).device
+        x = torch.zeros(1, 1, *shape).to(device)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
+        return x.numel() // x.shape[0]
+        
+    def forward(self, x):
+        # Initialize fc1 if it's the first forward pass
+        if self.fc1 is None:
+            input_size = self._get_conv_output_size(x.shape[2:])
+            self.fc1 = nn.Linear(input_size, 512).to(x.device)
+            
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
+        x = self.dropout(x)
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+
 class VOITrainer:
     def __init__(self, model, device, num_classes=2):
         self.model = model.to(device)
         self.device = device
         self.num_classes = num_classes
-        
-        self.y_pred_trans = Compose([Activations(softmax=True)])
-        self.y_trans = Compose([AsDiscrete(to_onehot=num_classes)])
-        self.auc_metric = ROCAUCMetric()
         
     def train_epoch(self, train_loader, optimizer, loss_function):
         self.model.train()
@@ -79,21 +109,29 @@ class VOITrainer:
     def validate(self, val_loader):
         self.model.eval()
         with torch.no_grad():
-            y_pred = torch.tensor([], dtype=torch.float32, device=self.device)
-            y = torch.tensor([], dtype=torch.long, device=self.device)
+            correct = 0
+            total = 0
+            y_true = []
+            y_scores = []
             
             for val_data in val_loader:
                 val_images, val_labels = val_data[0].to(self.device), val_data[1].to(self.device)
-                y_pred = torch.cat([y_pred, self.model(val_images)], dim=0)
-                y = torch.cat([y, val_labels], dim=0)
+                outputs = self.model(val_images)
+                
+                # Calculate accuracy
+                _, predicted = torch.max(outputs.data, 1)
+                total += val_labels.size(0)
+                correct += (predicted == val_labels).sum().item()
+                
+                # Store predictions for AUC calculation
+                y_true.extend(val_labels.cpu().numpy())
+                y_scores.extend(torch.softmax(outputs, dim=1)[:, 1].cpu().numpy())
             
-            y_onehot = self.y_trans(y)
-            y_pred_act = self.y_pred_trans(y_pred)
-            self.auc_metric(y_pred_act, y_onehot)
-            auc_result = self.auc_metric.aggregate()
-            self.auc_metric.reset()
+            accuracy = correct / total
             
-            accuracy = torch.eq(y_pred.argmax(dim=1), y).sum().item() / len(y)
+            # Calculate AUC using sklearn
+            from sklearn.metrics import roc_auc_score
+            auc_result = roc_auc_score(y_true, y_scores)
             
             return auc_result, accuracy
 
@@ -107,17 +145,17 @@ def prepare_data(images_array, labels_array, train_size=0.7, val_size=0.15):
     val_indices = indices[train_end:val_end]
     test_indices = indices[val_end:]
     
-    # Create data splits
-    train_x = [torch.tensor(images_array[i]).unsqueeze(0) for i in train_indices]
-    train_y = labels_array[train_indices]
+    # Create data splits - already as tensors with correct shape
+    train_x = torch.tensor(images_array[train_indices]).unsqueeze(1).float()  # Add channel dimension
+    train_y = torch.tensor(labels_array[train_indices]).long()
     
-    val_x = [torch.tensor(images_array[i]).unsqueeze(0) for i in val_indices]
-    val_y = labels_array[val_indices]
+    val_x = torch.tensor(images_array[val_indices]).unsqueeze(1).float()
+    val_y = torch.tensor(labels_array[val_indices]).long()
     
-    test_x = [torch.tensor(images_array[i]).unsqueeze(0) for i in test_indices]
-    test_y = labels_array[test_indices]
+    test_x = torch.tensor(images_array[test_indices]).unsqueeze(1).float()
+    test_y = torch.tensor(labels_array[test_indices]).long()
     
-    # Add class weights calculation
+    # Calculate class weights
     class_counts = np.bincount(labels_array)
     total_samples = len(labels_array)
     class_weights = torch.FloatTensor([total_samples / (len(class_counts) * count) 
@@ -251,18 +289,9 @@ def evaluate_predictions(predicted_boundaries, reference_boundaries):
 def test_model(model_path, test_files, reference_boundaries, device):
     """
     Test model on multiple files and calculate average delta.
-    
-    Args:
-        model_path: Path to saved model
-        test_files: List of test image paths
-        reference_boundaries: Dictionary mapping file paths to (start, end) tuples
-        device: torch device
-    
-    Returns:
-        Average delta across all test files
     """
     # Load model
-    model = DenseNet121(spatial_dims=2, in_channels=1, out_channels=2).to(device)
+    model = VOIClassifier().to(device)  # Changed from DenseNet121 to our custom model
     model.load_state_dict(torch.load(model_path))
     model.eval()
     
@@ -286,3 +315,56 @@ def test_model(model_path, test_files, reference_boundaries, device):
     avg_delta = np.mean(deltas)
     print(f"Average delta: {avg_delta}")
     return avg_delta
+
+# Configuration
+DATA_ROOT = 'Data'  # Root directory containing .nii.gz files
+DATASET_ROOT = 'Dataset'  # Directory for processed numpy arrays
+MARKINGS_FILE = os.path.join(DATA_ROOT, 'oznaczenia.txt')
+
+def prepare_dataset():
+    """Prepare and save the dataset from NIFTI files"""
+    os.makedirs(DATASET_ROOT, exist_ok=True)
+    
+    # Read markings file
+    with open(MARKINGS_FILE, 'r') as file:
+        lines = file.readlines()
+
+    images = []
+    labels = []
+    
+    # Process each NIFTI file
+    for line in lines:
+        if not line.strip():  # Skip empty lines
+            continue
+        print(line)
+        file_name, index1, index0 = line.strip().split('\t')
+        img_path = os.path.join(DATA_ROOT, file_name)
+        
+        # Load NIFTI file
+        ct_img = nib.load(img_path)
+        ct_data = ct_img.get_fdata()
+        
+        # Process each slice
+        for i in range(ct_data.shape[2]):
+            # Label is 1 if slice is within VOI range
+            label = 1 if i in range(int(index0), int(index1)+1) else 0
+            slice_data = ct_data[:, :, i]
+            
+            # Normalize slice
+            slice_data = normalize_slice(slice_data)
+            
+            images.append(slice_data)
+            labels.append(label)
+
+    # Convert to numpy arrays
+    images_array = np.array(images).astype(np.float32)
+    labels_array = np.array(labels).astype(np.int64)
+
+    print(images_array.shape)
+    print(labels_array.shape)
+    
+    # Save processed data
+    np.save(os.path.join(DATASET_ROOT, 'images.npy'), images_array)
+    np.save(os.path.join(DATASET_ROOT, 'labels.npy'), labels_array)
+    
+    return images_array, labels_array

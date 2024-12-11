@@ -1,69 +1,80 @@
 import os
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
-from monai.networks.nets import DenseNet121
+from torch.optim import Adam
 
-from model import VOIDataset, VOITrainer, prepare_data
+from model import VOIDataset, VOIClassifier, VOITrainer, prepare_data, prepare_dataset
 
-def train():
-    # Configuration
+def train(num_epochs=50, batch_size=32, learning_rate=0.001):
+    # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_classes = 2
-    batch_size = 32
-    learning_rate = 1e-5
-    max_epochs = 4
+    print(f"Using device: {device}")
+
+    # Load or prepare dataset
+    if os.path.exists(os.path.join('Dataset', 'images.npy')):
+        images = np.load(os.path.join('Dataset', 'images.npy'))
+        labels = np.load(os.path.join('Dataset', 'labels.npy'))
+    else:
+        images, labels = prepare_dataset()
+
+    # Prepare data splits and create datasets
+    (train_x, train_y), (val_x, val_y), (test_x, test_y), class_weights = prepare_data(images, labels)
     
-    # Load data
-    images_array = np.load(os.path.join('Dataset', 'images.npy'))
-    labels_array = np.load(os.path.join('Dataset', 'labels.npy'))
-    
-    # Prepare datasets
-    (train_x, train_y), (val_x, val_y), (test_x, test_y), class_weights = prepare_data(
-        images_array, labels_array
-    )
-    
-    train_ds = VOIDataset(train_x, train_y)
-    val_ds = VOIDataset(val_x, val_y)
-    test_ds = VOIDataset(test_x, test_y)
-    
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size)
-    test_loader = DataLoader(test_ds, batch_size=batch_size)
-    
-    # Initialize model and trainer
-    model = DenseNet121(spatial_dims=2, in_channels=1, out_channels=num_classes)
-    trainer = VOITrainer(model, device, num_classes)
-    
-    # Training setup
-    loss_function = torch.nn.CrossEntropyLoss(weight=class_weights.to(device))
-    optimizer = torch.optim.Adam(model.parameters(), learning_rate)
-    
+    train_dataset = VOIDataset(train_x, train_y, is_train=True)
+    val_dataset = VOIDataset(val_x, val_y, is_train=False)
+    test_dataset = VOIDataset(test_x, test_y, is_train=False)
+
+    print("Datasets created")
+
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+
+    print("Data loaders created")
+
+    # Initialize model, optimizer, and loss function
+    model = VOIClassifier().to(device)
+    optimizer = Adam(model.parameters(), lr=learning_rate)
+    class_weights = class_weights.to(device)
+    loss_function = nn.CrossEntropyLoss(weight=class_weights)
+
+    print("Model initalized")
+
+    # Initialize trainer
+    trainer = VOITrainer(model, device)
+
+    print("Trainer initalized")
+
     # Training loop
-    best_metric = -1
-    best_metric_epoch = -1
-    
-    for epoch in range(max_epochs):
-        print(f"\nEpoch {epoch + 1}/{max_epochs}")
-        
+    best_auc = 0.0
+    for epoch in range(num_epochs):
         # Train
-        epoch_loss = trainer.train_epoch(train_loader, optimizer, loss_function)
-        print(f"Average loss: {epoch_loss:.4f}")
+        train_loss = trainer.train_epoch(train_loader, optimizer, loss_function)
         
         # Validate
-        auc_result, accuracy = trainer.validate(val_loader)
+        auc, accuracy = trainer.validate(val_loader)
+        
+        print(f"Epoch {epoch+1}/{num_epochs}")
+        print(f"Train Loss: {train_loss:.4f}")
+        print(f"Val AUC: {auc:.4f}, Accuracy: {accuracy:.4f}")
         
         # Save best model
-        if auc_result > best_metric:
-            best_metric = auc_result
-            best_metric_epoch = epoch + 1
-            torch.save(model.state_dict(), "best_metric_model.pth")
-            print("Saved new best metric model")
-            
-        print(f"AUC: {auc_result:.4f}, Accuracy: {accuracy:.4f}")
-        print(f"Best AUC: {best_metric:.4f} at epoch: {best_metric_epoch}")
+        if auc > best_auc:
+            best_auc = auc
+            torch.save(model.state_dict(), 'best_model.pth')
+            print(f"Saved new best model with AUC: {best_auc:.4f}")
+        
+        print("-" * 40)
 
-    return "best_metric_model.pth"
+    # Final evaluation on test set
+    model.load_state_dict(torch.load('best_model.pth'))
+    test_auc, test_accuracy = trainer.validate(test_loader)
+    print(f"\nFinal Test Results:")
+    print(f"AUC: {test_auc:.4f}")
+    print(f"Accuracy: {test_accuracy:.4f}")
 
 if __name__ == "__main__":
     train() 
