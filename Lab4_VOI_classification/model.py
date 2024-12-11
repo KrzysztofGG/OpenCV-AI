@@ -287,11 +287,14 @@ def evaluate_predictions(predicted_boundaries, reference_boundaries):
     return delta
 
 def test_model(model_path, test_files, reference_boundaries, device):
-    """
-    Test model on multiple files and calculate average delta.
-    """
-    # Load model
-    model = VOIClassifier().to(device)  # Changed from DenseNet121 to our custom model
+    # Initialize model
+    model = VOIClassifier().to(device)
+    
+    # Create a dummy input to initialize fc1 layer
+    dummy_input = torch.zeros(1, 1, 256, 256).to(device)  # Assuming 256x256 input size
+    _ = model(dummy_input)  # This will initialize fc1
+    
+    # Now load the state dict
     model.load_state_dict(torch.load(model_path))
     model.eval()
     
