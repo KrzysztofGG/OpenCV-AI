@@ -331,6 +331,7 @@ def prepare_dataset():
 
     images = []
     labels = []
+    target_size = (256, 256)  # Define target size for resizing
     
     # Process each NIFTI file
     for line in lines:
@@ -350,10 +351,13 @@ def prepare_dataset():
             label = 1 if i in range(int(index0), int(index1)+1) else 0
             slice_data = ct_data[:, :, i]
             
-            # Normalize slice
-            slice_data = normalize_slice(slice_data)
+            # Resize the slice
+            resized_slice = resize(slice_data, target_size, mode='reflect', preserve_range=True)
             
-            images.append(slice_data)
+            # Normalize slice
+            normalized_slice = normalize_slice(resized_slice)
+            
+            images.append(normalized_slice)
             labels.append(label)
 
     print(images[0].shape)
