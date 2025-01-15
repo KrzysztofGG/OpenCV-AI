@@ -31,7 +31,7 @@ def test():
     
     # Run test
     avg_delta = test_model(
-        model_path="best_model.pth",
+        model_path="best_metric_model.pth",
         test_files=test_files,
         reference_boundaries=reference_boundaries,
         device=device

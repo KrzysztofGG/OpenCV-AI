@@ -5,6 +5,7 @@ from skimage.transform import resize
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader, Dataset
+from monai.networks.nets import DenseNet121
 from torchvision import transforms
 import torch.nn as nn
 import torch.nn.functional as F
@@ -289,14 +290,15 @@ def evaluate_predictions(predicted_boundaries, reference_boundaries):
 
 def test_model(model_path, test_files, reference_boundaries, device):
     # Initialize model
-    model = VOIClassifier().to(device)
+    # model = VOIClassifier().to(device)
+    model = DenseNet121(spatial_dims=2, in_channels=1, out_channels=2).to(device)
     
     # Create a dummy input to initialize fc1 layer
     dummy_input = torch.zeros(1, 1, 256, 256).to(device)  # Assuming 256x256 input size
     _ = model(dummy_input)  # This will initialize fc1
     
     # Now load the state dict
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
     
     deltas = []
